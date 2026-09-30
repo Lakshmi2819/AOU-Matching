@@ -15,7 +15,9 @@ pick_connection <- function() {
     DBI::dbConnect(
       bigrquery::bigquery(),
       project = parts[1], dataset = parts[2],
-      billing = Sys.getenv("GOOGLE_CLOUD_PROJECT")
+      billing = Sys.getenv("GOOGLE_CLOUD_PROJECT"),
+      # INT64 -> double (exact to 2^53); the default "integer" NAs large ids.
+      bigint = "numeric"
     )
   } else {
     suppressPackageStartupMessages(library(duckdb))
