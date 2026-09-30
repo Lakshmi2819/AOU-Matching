@@ -43,8 +43,23 @@ if (!nzchar(repo)) {
   }
 }
 
-message("Installing missing R packages from ", repo, ": ", paste(missing, collapse = ", "))
-install.packages(missing, repos = repo)
+# --- pick a writable library ---------------------------------------------------
+# In AoU the site library (e.g. /opt/conda/.../lib/R/library) is read-only, so
+# fall back to the per-user library. R puts R_LIBS_USER on .libPaths() at
+# startup only if the directory exists, so creating it here makes later
+# Rscript runs find these packages with no extra config.
+is_writable <- function(p) dir.exists(p) && file.access(p, 2) == 0
+lib <- Find(is_writable, .libPaths())
+if (is.null(lib)) {
+  lib <- path.expand(strsplit(Sys.getenv("R_LIBS_USER"), .Platform$path.sep)[[1]][1])
+  dir.create(lib, recursive = TRUE, showWarnings = FALSE)
+  .libPaths(c(lib, .libPaths()))
+  message("Site library not writable; installing into user library ", lib)
+}
+
+message("Installing missing R packages from ", repo, " into ", lib, ": ",
+        paste(missing, collapse = ", "))
+install.packages(missing, lib = lib, repos = repo)
 
 # Fail loudly if anything didn't actually land (e.g. a binary that won't load).
 still_missing <- setdiff(missing, rownames(installed.packages()))
