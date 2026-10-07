@@ -1,0 +1,9 @@
+# Run configuration for experiment 2026-10-07-pud-gibleed-matched.
+# Merged on top of experiments/_defaults.yaml, then handed to the entrypoint as
+# `--config <path>`. Paths are repo-relative (runner CWD = repo root).
+entrypoint: Rscript experiments/2026-10-07-pud-gibleed-matched/analysis.R
+sql_file: experiments/2026-10-07-pud-gibleed-matched/cohort.sql
+# Width of the birth-year bands used for exact matching.
+birth_band_years: 5
+# AoU dissemination policy: never display a count between 1 and 19.
+min_cell: 20
