@@ -20,6 +20,8 @@ set.seed(cfg$seed %||% 42)
 con <- pick_connection()
 on.exit(try(DBI::dbDisconnect(con, shutdown = TRUE), silent = TRUE), add = TRUE)
 dat <- DBI::dbGetQuery(con, paste(readLines(cfg$sql_file), collapse = "\n"))
+# Query row order isn't guaranteed; sort so the seeded matching is reproducible.
+dat <- dat[order(dat$person_id), ]
 
 # --- small-cell-safe formatting ------------------------------------------------
 small <- function(n) n > 0 & n < min_cell
