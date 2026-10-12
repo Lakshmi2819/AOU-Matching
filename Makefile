@@ -1,15 +1,27 @@
-.PHONY: help install test lint precommit-install run-exp setup-workspace new-exp
+.PHONY: help install install-spark install-brpmatch test lint precommit-install run-exp setup-workspace new-exp
 default: help
 
 help:
 	@echo "Common targets:"
 	@echo "  install           - editable install with dev tools"
+	@echo "  install-spark     - laptop: + local Spark and BRPMatch"
+	@echo "  install-brpmatch  - AoU: BRPMatch on the cluster's Spark"
 	@echo "  test              - run the fast Python unit suite"
 	@echo "  lint              - run pre-commit on all files"
 	@echo "  precommit-install - install git hooks + nbstripout filter"
 
 install:
 	python -m pip install -e ".[dev]"
+
+# Laptop: local Spark + BRPMatch (needs Java 17: brew install openjdk@17).
+install-spark:
+	python -m pip install -e ".[dev,spark]"
+
+# AoU Dataproc: BRPMatch only. --no-deps keeps the cluster's own pyspark;
+# its other deps (numpy, pandas, scipy, scikit-learn, matplotlib) ship with the image.
+BRPMATCH_REF := 81062b49bd7fb87c7c3078a190e12c8118a8e29f
+install-brpmatch:
+	python -m pip install --no-deps "brpmatch @ git+https://github.com/oneilsh/brpmatch.git@$(BRPMATCH_REF)"
 
 test:
 	pytest -q

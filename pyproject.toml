@@ -7,6 +7,15 @@ dependencies = ["pyyaml>=6.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.5", "pre-commit>=3.7", "nbstripout>=0.7"]
+# Local Spark + BRPMatch matching (laptop only). In AoU, pyspark comes from the
+# Dataproc cluster; use `make install-brpmatch` there instead of this extra.
+spark = [
+    "duckdb>=1.0",
+    "pandas>=1.3",
+    "pyspark>=3.5,<4.0",
+    "pyarrow>=15.0",
+    "brpmatch @ git+https://github.com/oneilsh/brpmatch.git@81062b49bd7fb87c7c3078a190e12c8118a8e29f",
+]
 
 [project.scripts]
 run-experiment = "utilities.cli.run:main"

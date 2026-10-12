@@ -1,0 +1,22 @@
+# Run configuration for this experiment.
+# Merged on top of experiments/_defaults.yaml, then handed to the entrypoint as
+# `--config <path>`. Paths are repo-relative (runner CWD = repo root).
+entrypoint: python experiments/2026-10-12-pud-gibleed-brpmatch/analysis.py
+sql_file: experiments/2026-10-12-pud-gibleed-brpmatch/cohort.sql
+
+# Covariates (columns produced by cohort.sql).
+exact_match_cols: [gender_concept_id]          # must match exactly
+numeric_cols: [year_of_birth, log_visits]      # distance-matched
+categorical_cols: [race_concept_id, ethnicity_concept_id]  # one-hot, distance-matched
+
+# BRPMatch settings.
+feature_space: mahalanobis   # or euclidean
+ratio_k: 1                   # controls per exposed person
+with_replacement: false
+
+# Fraction of rows used for the balance table / love plot (1.0 = all).
+balance_sample_frac: 1.0
+
+# AoU dissemination policy: never display a count between 1 and 19. Categories
+# with fewer than this many people in either group are merged into "other".
+min_cell: 20
