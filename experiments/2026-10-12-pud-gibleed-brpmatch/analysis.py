@@ -14,6 +14,8 @@ from 1 to min_cell-1 is shown as "<min_cell" (AoU small-cell rule).
 from __future__ import annotations
 
 import argparse
+import gc
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -29,6 +31,9 @@ from scipy.stats import chi2  # noqa: E402
 
 from utilities.data import query_df  # noqa: E402
 from utilities.spark import get_spark, ship_package  # noqa: E402
+
+# Line-buffer so output order matches what happened (stdout is a pipe under the runner).
+sys.stdout.reconfigure(line_buffering=True)
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--config", required=True)
@@ -84,6 +89,10 @@ print(f"[cohort] peptic ulcer (exposed): {fmt_n(n_exp)}; unexposed: {fmt_n(n_une
 spark = get_spark("pud-gibleed-brpmatch")
 ship_package(spark, brpmatch)  # executors run brpmatch code in applyInPandas
 df = spark.createDataFrame(pdf)
+# The AoU master node is small (7 GB shared with Jupyter): drop the pandas copy
+# once Spark has the data. Everything after this point uses Spark.
+del pdf
+gc.collect()
 
 # --- 2. matching ---------------------------------------------------------------
 features_df = generate_features(
