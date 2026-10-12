@@ -20,3 +20,7 @@ balance_sample_frac: 1.0
 # AoU dissemination policy: never display a count between 1 and 19. Categories
 # with fewer than this many people in either group are merged into "other".
 min_cell: 20
+
+# CDR tables cohort.sql reads; registered as Spark SQL views (BigQuery
+# connector in AoU, copied from DuckDB locally).
+cdr_tables: [person, condition_occurrence, concept_ancestor, visit_occurrence]

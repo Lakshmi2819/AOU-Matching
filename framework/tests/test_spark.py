@@ -1,7 +1,13 @@
 import types
 import zipfile
 
-from utilities.spark import zip_package
+from utilities.spark import spark_sql_text, zip_package
+
+
+def test_spark_sql_text_drops_trailing_semicolon():
+    # Spark SQL rejects a trailing ';' that DuckDB and BigQuery accept.
+    assert spark_sql_text("SELECT 1;\n\n") == "SELECT 1"
+    assert spark_sql_text("-- note\nSELECT 1") == "-- note\nSELECT 1"
 
 
 def test_zip_package_keeps_package_dir_at_archive_root(tmp_path):

@@ -37,11 +37,17 @@ make run-exp SLUG=pud-gibleed-brpmatch
 AoU Workbench (Dataproc cluster; once per new cluster, after the usual setup):
 ```sh
 make install-brpmatch
-python -c "import pyspark, sklearn, scipy, pyarrow, google.cloud.bigquery, db_dtypes; print(pyspark.__version__)"
+python -c "import pyspark, sklearn, scipy, pyarrow; print(pyspark.__version__)"
 source .workspace_env
 make run-exp SLUG=pud-gibleed-brpmatch
 ```
 The check line must print a pyspark version >= 3.5 with no import error.
+
+The cohort is built in Spark SQL: in AoU the executors read the CDR tables
+(`cdr_tables` in config.yaml) through the Spark BigQuery connector, so no
+row-level data passes through the master node, which is small (7 GB, most of
+it used by cluster services) and ran out of memory when the cohort was
+loaded through pandas. Reading `condition_occurrence` takes a few minutes.
 
 ## Results
 Local Eunomia (synthetic) run, 2026-10-12:

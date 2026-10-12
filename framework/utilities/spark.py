@@ -8,9 +8,13 @@ package and registers it with addPyFile.
 """
 from __future__ import annotations
 
+import os
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Iterable, Mapping
+
+from utilities.data import backend, parse_cdr
 
 
 def get_spark(app_name: str):
@@ -45,3 +49,38 @@ def ship_package(spark, module) -> Path:
     out = zip_package(module, Path(tempfile.mkdtemp(prefix="spark-pkg-")))
     spark.sparkContext.addPyFile(str(out))
     return out
+
+
+def spark_sql_text(sql: str) -> str:
+    """Spark SQL rejects the trailing ';' that DuckDB and BigQuery accept."""
+    return sql.rstrip().rstrip(";").rstrip()
+
+
+def load_cohort(spark, sql: str, tables: Iterable[str],
+                env: Mapping[str, str] | None = None,
+                duckdb_path: str = "data/eunomia.duckdb"):
+    """Run cohort SQL in Spark SQL over CDR tables registered as temp views.
+
+    In AoU the BigQuery connector reads each table straight into the executors
+    (with column pruning and filter pushdown), so no row-level data passes
+    through the small master node. Locally the Eunomia tables are copied in
+    from DuckDB, which exercises the same Spark SQL.
+    """
+    env = os.environ if env is None else env
+    if backend(env) == "bigquery":
+        project, dataset = parse_cdr(env["WORKSPACE_CDR"])
+        for t in tables:
+            (spark.read.format("bigquery")
+             .option("parentProject", env.get("GOOGLE_CLOUD_PROJECT") or project)
+             .load(f"{project}.{dataset}.{t}")
+             .createOrReplaceTempView(t))
+    else:
+        import duckdb
+
+        con = duckdb.connect(duckdb_path, read_only=True)
+        try:
+            for t in tables:
+                spark.createDataFrame(con.execute(f"SELECT * FROM {t}").df()).createOrReplaceTempView(t)
+        finally:
+            con.close()
+    return spark.sql(spark_sql_text(sql))

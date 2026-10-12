@@ -1,20 +1,20 @@
 #!/usr/bin/env python
 """BRPMatch version of the peptic ulcer -> GI bleed matched comparison.
 
-  1. Cohort: query the CDR (BigQuery in AoU, DuckDB locally) into Spark.
+  1. Cohort: Spark SQL over the CDR tables (BigQuery connector in AoU,
+     Eunomia copied from DuckDB locally).
   2. Matching: BRPMatch nearest-neighbour matching (LSH buckets + k-NN) on the
      covariates in config.yaml, exact on gender.
   3. Balance: SMD / variance ratio before and after, plus a love plot.
   4. Outcome: GI bleed risk in each matched group, paired risk difference,
      risk ratio, McNemar test (1:1 only); crude risks for comparison.
 
-Row-level data stays in Spark/pandas; only aggregates are printed. Any count
+Row-level data stays in Spark; only aggregates are printed. Any count
 from 1 to min_cell-1 is shown as "<min_cell" (AoU small-cell rule).
 """
 from __future__ import annotations
 
 import argparse
-import gc
 import sys
 from pathlib import Path
 
@@ -29,8 +29,7 @@ import yaml  # noqa: E402
 from brpmatch import generate_features, match, match_summary  # noqa: E402
 from scipy.stats import chi2  # noqa: E402
 
-from utilities.data import query_df  # noqa: E402
-from utilities.spark import get_spark, ship_package  # noqa: E402
+from utilities.spark import get_spark, load_cohort, ship_package  # noqa: E402
 
 # Line-buffer so output order matches what happened (stdout is a pipe under the runner).
 sys.stdout.reconfigure(line_buffering=True)
@@ -63,36 +62,42 @@ def fmt_pct(k, n) -> str:
 
 
 # --- 1. cohort -----------------------------------------------------------------
-pdf = query_df(Path(cfg["sql_file"]).read_text())
-# Query row order isn't guaranteed; sort so seeded matching is reproducible.
-pdf = pdf.sort_values("person_id").reset_index(drop=True)
-pdf = pdf.astype({"person_id": "int64", "exposed": "int64", "outcome": "int64",
-                  **{c: "float64" for c in num_cols}})
+# Spark only: in AoU the executors read the CDR tables from BigQuery, so no
+# row-level data passes through the small master node (7 GB, mostly used by
+# cluster services).
+spark = get_spark("pud-gibleed-brpmatch")
+ship_package(spark, brpmatch)  # executors run brpmatch code in applyInPandas
+df = load_cohort(spark, Path(cfg["sql_file"]).read_text(), cfg["cdr_tables"])
+df = df.select(
+    F.col("person_id").cast("long"),
+    F.col("exposed").cast("int"),
+    F.col("outcome").cast("int"),
+    *[F.col(c).cast("double") for c in num_cols],
+    *[F.col(c).cast("string") for c in exact_cols + cat_cols],
+)
 
 # Merge categories too small to show safely (in either group) into "other".
 for c in exact_cols + cat_cols:
-    pdf[c] = pdf[c].astype("string")
-    counts = pdf.groupby([c, "exposed"]).size().unstack(fill_value=0)
-    rare = counts.index[(counts.min(axis=1) < min_cell)].tolist()
+    counts = df.groupBy(c).agg(F.sum("exposed").alias("e"),
+                               F.sum(1 - F.col("exposed")).alias("u")).collect()
+    rare = [r[c] for r in counts if min(r["e"], r["u"]) < min_cell and r[c] is not None]
     if rare:
-        pdf.loc[pdf[c].isin(rare), c] = "other"
-    print(f"[cohort] {c}: {counts.shape[0] - len(rare)} categories kept, "
+        df = df.withColumn(c, F.when(F.col(c).isin(rare), F.lit("other")).otherwise(F.col(c)))
+    print(f"[cohort] {c}: {len(counts) - len(rare)} categories kept, "
           f"{len(rare)} merged into 'other'")
 
-n_exp = int(pdf["exposed"].sum())
-n_unexp = len(pdf) - n_exp
-crude_e = int(pdf.loc[pdf.exposed == 1, "outcome"].sum())
-crude_u = int(pdf.loc[pdf.exposed == 0, "outcome"].sum())
-print(f"[cohort] people with EHR conditions: {fmt_n(len(pdf))}")
+# Sort so seeded matching is reproducible; cache on the executors.
+df = df.orderBy("person_id").cache()
+tot = df.agg(
+    F.count("*").alias("n"),
+    F.sum("exposed").alias("n_exp"),
+    F.sum(F.col("exposed") * F.col("outcome")).alias("crude_e"),
+    F.sum((1 - F.col("exposed")) * F.col("outcome")).alias("crude_u"),
+).collect()[0]
+n_exp, n_unexp = tot["n_exp"], tot["n"] - tot["n_exp"]
+crude_e, crude_u = tot["crude_e"], tot["crude_u"]
+print(f"[cohort] people with EHR conditions: {fmt_n(tot['n'])}")
 print(f"[cohort] peptic ulcer (exposed): {fmt_n(n_exp)}; unexposed: {fmt_n(n_unexp)}")
-
-spark = get_spark("pud-gibleed-brpmatch")
-ship_package(spark, brpmatch)  # executors run brpmatch code in applyInPandas
-df = spark.createDataFrame(pdf)
-# The AoU master node is small (7 GB shared with Jupyter): drop the pandas copy
-# once Spark has the data. Everything after this point uses Spark.
-del pdf
-gc.collect()
 
 # --- 2. matching ---------------------------------------------------------------
 features_df = generate_features(
