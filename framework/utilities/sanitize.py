@@ -30,6 +30,10 @@ PATIENT_PATTERNS: list[re.Pattern] = [
 NOISE_PATTERNS: list[re.Pattern] = [
     re.compile(r"^\d{2}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} (INFO|WARN|DEBUG) "),
     re.compile(r"\[CONTEXT ratelimit_period="),
+    # YARN container diagnostics when an executor is stopped (Spark recovers).
+    re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+\]"),
+    re.compile(r"^\.\s*$"),
+    re.compile(r"ERROR YarnScheduler: Lost executor"),
 ]
 
 DROP_PATTERNS: list[re.Pattern] = PATIENT_PATTERNS + NOISE_PATTERNS

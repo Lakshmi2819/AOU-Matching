@@ -58,13 +58,15 @@ def spark_sql_text(sql: str) -> str:
 
 def load_cohort(spark, sql: str, tables: Iterable[str],
                 env: Mapping[str, str] | None = None,
-                duckdb_path: str = "data/eunomia.duckdb"):
+                duckdb_path: str = "data/eunomia.duckdb",
+                params: Mapping[str, object] | None = None):
     """Run cohort SQL in Spark SQL over CDR tables registered as temp views.
 
     In AoU the BigQuery connector reads each table straight into the executors
     (with column pruning and filter pushdown), so no row-level data passes
     through the small master node. Locally the Eunomia tables are copied in
-    from DuckDB, which exercises the same Spark SQL.
+    from DuckDB, which exercises the same Spark SQL. `params` fills named
+    markers in the SQL (e.g. `:outcome_days`).
     """
     env = os.environ if env is None else env
     if backend(env) == "bigquery":
@@ -83,4 +85,6 @@ def load_cohort(spark, sql: str, tables: Iterable[str],
                 spark.createDataFrame(con.execute(f"SELECT * FROM {t}").df()).createOrReplaceTempView(t)
         finally:
             con.close()
+    if params:
+        return spark.sql(spark_sql_text(sql), args=dict(params))
     return spark.sql(spark_sql_text(sql))

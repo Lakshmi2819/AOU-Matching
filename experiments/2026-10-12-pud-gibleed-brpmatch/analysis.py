@@ -191,12 +191,13 @@ else:
     se = s["sd"] / np.sqrt(s["n"])
     print(f"[matched] risk difference = {100 * s['rd']:.2f} pp "
           f"(95% CI {100 * (s['rd'] - 1.96 * se):.2f} to {100 * (s['rd'] + 1.96 * se):.2f}); "
-          f"risk ratio = {risk_t / risk_c:.2f}")
+          f"risk ratio = {f'{risk_t / risk_c:.2f}' if risk_c > 0 else 'undefined (no control events)'}")
     if ratio_k == 1:
         b, c = s["b"], s["c"]
-        stat = (abs(b - c) - 1) ** 2 / (b + c)  # continuity-corrected, as R's mcnemar.test
         print(f"[matched] discordant pairs: exposed-only {fmt_n(b)}, control-only {fmt_n(c)}")
-        print(f"[matched] McNemar chi-sq = {stat:.2f}, p = {chi2.sf(stat, 1):.4g}")
+        if b + c > 0:
+            stat = (abs(b - c) - 1) ** 2 / (b + c)  # continuity-corrected, as R's mcnemar.test
+            print(f"[matched] McNemar chi-sq = {stat:.2f}, p = {chi2.sf(stat, 1):.4g}")
     if cfg.get("with_replacement"):
         print("[matched] note: CI ignores reuse of controls (with replacement), so it is too narrow")
 

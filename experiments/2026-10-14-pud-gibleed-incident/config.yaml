@@ -1,0 +1,33 @@
+# Run configuration for this experiment.
+# Merged on top of experiments/_defaults.yaml, then handed to the entrypoint as
+# `--config <path>`. Paths are repo-relative (runner CWD = repo root).
+entrypoint: python experiments/2026-10-14-pud-gibleed-incident/analysis.py
+sql_file: experiments/2026-10-14-pud-gibleed-incident/cohort.sql
+
+# CDR tables cohort.sql reads; registered as Spark SQL views (BigQuery
+# connector in AoU, copied from DuckDB locally).
+cdr_tables: [person, condition_occurrence, concept_ancestor, visit_occurrence, observation_period]
+
+# Named parameters for cohort.sql: required observation before index (washout,
+# so the ulcer is new; also the prior-visits window) and the outcome window
+# after index (observation must cover it).
+sql_params:
+  washout_days: 365
+  outcome_days: 365
+
+# Covariates (columns produced by cohort.sql), all measured at the index date.
+exact_match_cols: [gender_concept_id]                       # must match exactly
+numeric_cols: [age_at_index, index_year, log_prior_visits]  # distance-matched
+categorical_cols: [race_concept_id, ethnicity_concept_id]   # one-hot, distance-matched
+
+# BRPMatch settings.
+feature_space: mahalanobis   # or euclidean
+ratio_k: 1                   # controls per exposed person
+with_replacement: false
+
+# Fraction of rows used for the balance table / love plot (1.0 = all).
+balance_sample_frac: 1.0
+
+# AoU dissemination policy: never display a count between 1 and 19. Categories
+# with fewer than this many people in either group are merged into "other".
+min_cell: 20
