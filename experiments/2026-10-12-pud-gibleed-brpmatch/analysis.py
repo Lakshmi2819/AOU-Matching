@@ -124,8 +124,18 @@ n_t_matched, n_c_matched = u[True]["matched"], u[False]["matched"]
 print(f"[match] BRPMatch {cfg.get('feature_space', 'mahalanobis')}, 1:{ratio_k}, "
       f"{'with' if cfg.get('with_replacement') else 'without'} replacement; "
       f"exact on {', '.join(exact_cols) or 'nothing'}")
-print(f"[match] exposed matched: {fmt_n(n_t_matched)} of {fmt_n(u[True]['n'])} "
-      f"({fmt_n(u[True]['n'] - n_t_matched)} unmatched); controls used: {fmt_n(n_c_matched)}")
+# Don't print a total alongside a matched count whose difference is a small cell:
+# "N - k of N (<20 unmatched)" lets anyone subtract and recover k.
+n_unmatched = u[True]["n"] - n_t_matched
+if small(n_unmatched):
+    print(f"[match] exposed matched: all but <{min_cell} of {fmt_n(u[True]['n'])}")
+else:
+    print(f"[match] exposed matched: {fmt_n(n_t_matched)} of {fmt_n(u[True]['n'])} "
+          f"({fmt_n(n_unmatched)} unmatched)")
+# For 1:1 without replacement, controls used ~= exposed matched, so printing it
+# would leak the same difference; it is only informative for k:1 / replacement.
+if ratio_k > 1 or cfg.get("with_replacement"):
+    print(f"[match] controls used: {fmt_n(n_c_matched)}")
 
 # --- 3. balance ----------------------------------------------------------------
 balance, _, fig = match_summary(features_df, units,
