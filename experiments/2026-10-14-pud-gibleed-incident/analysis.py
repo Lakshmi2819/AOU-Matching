@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import matplotlib
@@ -30,6 +31,7 @@ import yaml  # noqa: E402
 from brpmatch import generate_features, match, match_summary  # noqa: E402
 from scipy.stats import chi2  # noqa: E402
 
+from utilities.brpmatch_report import collect_bucket_stats, format_bucket_stats  # noqa: E402
 from utilities.spark import get_spark, load_cohort, ship_package  # noqa: E402
 
 # Line-buffer so output order matches what happened (stdout is a pipe under the runner).
@@ -111,24 +113,29 @@ features_df = generate_features(
     categorical_cols=cat_cols or None, numeric_cols=num_cols or None,
     exact_match_cols=exact_cols or None,
 ).cache()
-units, pairs, _ = match(
+rebucket = cfg.get("rebucket_threshold", 10000)
+t0 = time.perf_counter()
+units, pairs, bucket_stats = match(
     features_df,
     feature_space=cfg.get("feature_space", "mahalanobis"),
     ratio_k=ratio_k,
     with_replacement=cfg.get("with_replacement", False),
+    num_patients_trigger_rebucket=rebucket,
     seed=cfg.get("seed", 42),
-    verbose=False,  # its bucket diagnostics can include small counts
+    verbose=False,  # its per-bucket printout can include small counts
 )
 units = units.cache()
 
 u = units.groupBy("is_treated").agg(
     F.count("*").alias("n"), F.sum(F.when(F.col("weight") > 0, 1).otherwise(0)).alias("matched"),
 ).collect()
+match_secs = time.perf_counter() - t0
 u = {r["is_treated"]: r for r in u}
 n_t_matched, n_c_matched = u[True]["matched"], u[False]["matched"]
 print(f"[match] BRPMatch {cfg.get('feature_space', 'mahalanobis')}, 1:{ratio_k}, "
       f"{'with' if cfg.get('with_replacement') else 'without'} replacement; "
-      f"exact on {', '.join(exact_cols) or 'nothing'}")
+      f"exact on {', '.join(exact_cols) or 'nothing'}; rebucket threshold {rebucket:,}")
+print(f"[match] wall time (bucketing + matching): {match_secs:.0f}s")
 # Don't print a total alongside a matched count whose difference is a small cell:
 # "N - k of N (<20 unmatched)" lets anyone subtract and recover k.
 n_unmatched = u[True]["n"] - n_t_matched
@@ -141,6 +148,8 @@ else:
 # would leak the same difference; it is only informative for k:1 / replacement.
 if ratio_k > 1 or cfg.get("with_replacement"):
     print(f"[match] controls used: {fmt_n(n_c_matched)}")
+for line in format_bucket_stats(collect_bucket_stats(bucket_stats), min_cell):
+    print(line)
 
 # --- 3. balance ----------------------------------------------------------------
 balance, _, fig = match_summary(features_df, units,

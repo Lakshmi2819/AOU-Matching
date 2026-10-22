@@ -24,6 +24,9 @@ categorical_cols: [race_concept_id, ethnicity_concept_id]   # one-hot, distance-
 feature_space: mahalanobis   # or euclidean
 ratio_k: 1                   # controls per exposed person
 with_replacement: false
+# Buckets larger than this are split further (BRPMatch default 10000). Lower it
+# (e.g. 300, as in BRPMatch's synthetic benchmark) to stress the bucketing.
+rebucket_threshold: 10000
 
 # Fraction of rows used for the balance table / love plot (1.0 = all).
 balance_sample_frac: 1.0

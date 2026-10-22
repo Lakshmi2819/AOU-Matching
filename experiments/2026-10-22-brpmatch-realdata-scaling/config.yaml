@@ -1,0 +1,34 @@
+# Real-data BRPMatch scaling benchmark (no outcome). Cohort built in Spark SQL
+# from the CDR; every size/ratio change below is a Spark filter, not pandas.
+entrypoint: python experiments/2026-10-22-brpmatch-realdata-scaling/bench.py
+sql_file: experiments/2026-10-22-brpmatch-realdata-scaling/cohort.sql
+cdr_tables: [person, condition_occurrence, concept_ancestor, visit_occurrence]
+
+sql_params:
+  treatment_concept_id: 316866   # hypertensive disorder (and descendants)
+  population_pct: 100            # deterministic share of all EHR persons
+
+# Covariates (columns produced by cohort.sql).
+exact_match_cols: [gender_concept_id]
+numeric_cols: [year_of_birth, log_visits, log_conditions]
+categorical_cols: [race_concept_id, ethnicity_concept_id]
+
+feature_space: mahalanobis
+ratio_k: 1
+with_replacement: false
+n_neighbors: 5
+
+# One matching run per entry, on the same cached cohort. treated_pct /
+# control_pct keep a deterministic hash-based share of each group, which sets
+# the size and the treated:control ratio; threshold = rebucket threshold.
+# First AoU pass: one full-cohort run to measure size and runtime. Uncomment
+# the rest (threshold sweep, then ratio sweep) once that is known.
+runs:
+  - {treated_pct: 100, control_pct: 100, threshold: 10000}
+  # - {treated_pct: 100, control_pct: 100, threshold: 1000}
+  # - {treated_pct: 100, control_pct: 100, threshold: 300}
+  # - {treated_pct: 25, control_pct: 100, threshold: 10000}
+  # - {treated_pct: 5, control_pct: 100, threshold: 10000}
+
+# AoU dissemination policy: never display a participant count from 1 to 19.
+min_cell: 20
