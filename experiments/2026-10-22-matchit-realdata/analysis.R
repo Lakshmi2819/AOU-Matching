@@ -93,7 +93,8 @@ for (r in cfg$runs) {
   keep <- (dat$treat == 1 & dat$person_id %% 100 < r$treated_pct) |
           (dat$treat == 0 & dat$person_id %% 100 < r$control_pct)
   d <- droplevels(dat[keep, ])
-  n_t <- sum(d$treat == 1); n_c <- sum(d$treat == 0)
+  # as.numeric: n_t * n_c overflows R integers (~2.1e9) from the 25% size up
+  n_t <- as.numeric(sum(d$treat == 1)); n_c <- as.numeric(sum(d$treat == 0))
 
   if (!is.null(last)) {
     projected <- last$secs * (n_t * n_c) / (last$n_t * last$n_c) / 60
