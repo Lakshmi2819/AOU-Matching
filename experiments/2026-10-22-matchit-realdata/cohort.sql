@@ -30,7 +30,7 @@ SELECT
   p.year_of_birth,
   LN(1 + COALESCE(v.n_visits, 0)) AS log_visits,
   LN(1 + e.n_conditions) AS log_conditions,
-  CASE WHEN t.person_id IS NOT NULL THEN 1 ELSE 0 END AS treat
+  CASE WHEN t.person_id IS NOT NULL THEN 1 ELSE 0 END AS treatment  -- not "treat": reserved in BigQuery
 FROM person p
 JOIN ehr e ON e.person_id = p.person_id
 LEFT JOIN treated t ON t.person_id = p.person_id

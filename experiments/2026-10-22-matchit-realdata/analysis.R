@@ -37,7 +37,7 @@ on.exit(try(DBI::dbDisconnect(con, shutdown = TRUE), silent = TRUE), add = TRUE)
 t0 <- Sys.time()
 dat <- DBI::dbGetQuery(con, sql)
 dat <- dat[order(dat$person_id), ]
-dat$treat <- as.integer(dat$treat)
+dat$treat <- as.integer(dat$treatment)  # SQL column is "treatment": TREAT is reserved in BigQuery
 for (c in num_cols) dat[[c]] <- as.numeric(dat[[c]])
 
 # Merge categories with fewer than min_cell people in either group into
