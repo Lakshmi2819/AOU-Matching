@@ -1,0 +1,32 @@
+# MatchIt (R) on the same real-data task as 2026-10-22-brpmatch-realdata-scaling,
+# for the BRPMatch vs MatchIt comparison. Runs single-machine in R (in AoU:
+# the master node), reading the cohort from BigQuery via pick_connection().
+entrypoint: Rscript experiments/2026-10-22-matchit-realdata/analysis.R
+sql_file: experiments/2026-10-22-matchit-realdata/cohort.sql
+
+sql_params:
+  treatment_concept_id: 316866   # hypertensive disorder (and descendants)
+  population_pct: 100            # person_id mod 100 < pct
+
+# Same covariates and settings as the BRPMatch run.
+exact_match_cols: [gender_concept_id]
+numeric_cols: [year_of_birth, log_visits, log_conditions]
+categorical_cols: [race_concept_id, ethnicity_concept_id]
+ratio_k: 1
+with_replacement: false
+
+# Size ladder: same person_id mod 100 subsets as the BRPMatch config, smallest
+# first. Before each run the time is projected from the previous run (MatchIt's
+# nearest-neighbour Mahalanobis matching scales with treated x controls); runs
+# projected over max_minutes_per_run are skipped rather than started.
+runs:
+  - {treated_pct: 1, control_pct: 1}
+  - {treated_pct: 5, control_pct: 5}
+  - {treated_pct: 10, control_pct: 10}
+  - {treated_pct: 25, control_pct: 25}
+  - {treated_pct: 50, control_pct: 50}
+  - {treated_pct: 100, control_pct: 100}
+max_minutes_per_run: 120
+
+# AoU dissemination policy: never display a participant count from 1 to 19.
+min_cell: 20

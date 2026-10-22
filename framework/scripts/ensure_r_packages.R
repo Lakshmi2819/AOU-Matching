@@ -4,7 +4,7 @@
 # `make setup-workspace`. Local-only deps (duckdb, Eunomia) are NOT here; see
 # GETTING_STARTED.md for the laptop set.
 
-pkgs <- c("DBI", "bigrquery", "digest", "yaml")
+pkgs <- c("DBI", "bigrquery", "digest", "yaml", "MatchIt")
 
 missing <- setdiff(pkgs, rownames(installed.packages()))
 if (length(missing) == 0) {

@@ -4,7 +4,7 @@
 -- common condition, so the treated group is large and the task is hard).
 -- Covariates are real CDR features: gender, race, ethnicity, year of birth,
 -- log(1 + visit count), log(1 + distinct condition concepts).
--- :population_pct keeps a deterministic hash-based share of people (100 = all),
+-- :population_pct keeps people with person_id mod 100 < pct (100 = all),
 -- to shrink the whole task; per-run treated/control subsampling and the
 -- rebucket threshold are in bench.py / config.yaml.
 -- Spark SQL dialect (load_cohort() runs it over the CDR tables as Spark views:
@@ -42,4 +42,4 @@ LEFT JOIN treated t ON t.person_id = p.person_id
 LEFT JOIN visits v ON v.person_id = p.person_id
 WHERE p.gender_concept_id IS NOT NULL
   AND p.year_of_birth IS NOT NULL
-  AND pmod(xxhash64(p.person_id, 'population'), 100) < :population_pct;
+  AND pmod(p.person_id, 100) < :population_pct;

@@ -6,7 +6,7 @@
   2. Features: generate_features() once, so one-hot categories are identical
      across runs.
   3. Runs: for each entry in config `runs`, keep a deterministic hash-based
-     share of treated and of controls (sets size and treated:control ratio),
+     share of treated and of controls (person_id mod 100; sets size and ratio),
      match with the given rebucket threshold, and report match rate, covariate
      balance (SMD computed in Spark, not via match_summary(), which collects
      the whole cohort to the driver), bucket stats and wall time.
@@ -48,9 +48,13 @@ def fmt_n(n) -> str:
     return f"<{min_cell}" if small(n) else f"{int(n):,}"
 
 
-def keep_share(id_col: str, salt: str, pct: float):
-    """Deterministic hash-based subsample: True for about pct% of ids."""
-    return F.pmod(F.xxhash64(F.col(id_col), F.lit(salt)), F.lit(100)) < F.lit(pct)
+def keep_share(id_col: str, pct: float):
+    """Deterministic subsample: person_id mod 100 < pct (about pct% of ids).
+
+    Plain arithmetic rather than a hash so the R/MatchIt comparison
+    (experiments/2026-10-22-matchit-realdata) selects exactly the same people.
+    """
+    return F.pmod(F.col(id_col).cast("long"), F.lit(100)) < F.lit(pct)
 
 
 def balance(feats, units, cols):
@@ -144,8 +148,8 @@ for r in cfg["runs"]:
     tp, cp, thr = r["treated_pct"], r["control_pct"], r["threshold"]
     label = f"[run t{tp}% c{cp}% thr{thr}]"
     sub = feats.filter(
-        ((F.col("treat__treat") == 1) & keep_share("person_id__id", "treated", tp))
-        | ((F.col("treat__treat") == 0) & keep_share("person_id__id", "control", cp))
+        ((F.col("treat__treat") == 1) & keep_share("person_id__id", tp))
+        | ((F.col("treat__treat") == 0) & keep_share("person_id__id", cp))
     ).cache()
     n = sub.agg(F.count("*").alias("n"), F.sum("treat__treat").alias("t")).collect()[0]
     n_t, n_c = n["t"], n["n"] - n["t"]
@@ -172,7 +176,7 @@ for r in cfg["runs"]:
     print(f"{label} treated {fmt_n(n_t)}, controls {fmt_n(n_c)} (1:{n_c / max(n_t, 1):.1f}); "
           f"matched {rate}; max |SMD| {smd_before:.3f} -> {smd_after:.3f} ({worst}); "
           f"match wall time {secs:.0f}s")
-    for line in format_bucket_stats(collect_bucket_stats(bstats), min_cell):
+    for line in format_bucket_stats(collect_bucket_stats(bstats), min_cell, n_total=n_t + n_c, n_treated=n_t):
         print(line.replace("[buckets]", f"{label} [buckets]", 1))
     units.unpersist()
     sub.unpersist()

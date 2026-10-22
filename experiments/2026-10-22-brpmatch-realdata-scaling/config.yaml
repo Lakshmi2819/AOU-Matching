@@ -19,12 +19,18 @@ with_replacement: false
 n_neighbors: 5
 
 # One matching run per entry, on the same cached cohort. treated_pct /
-# control_pct keep a deterministic hash-based share of each group, which sets
-# the size and the treated:control ratio; threshold = rebucket threshold.
-# First AoU pass: one full-cohort run to measure size and runtime. Uncomment
-# the rest (threshold sweep, then ratio sweep) once that is known.
+# control_pct keep people with person_id mod 100 < pct in each group (the
+# same rule as the MatchIt comparison, so both match identical subsets);
+# threshold = rebucket threshold.
+# Size ladder for the BRPMatch vs MatchIt comparison (ratio stays ~1:1.1).
+# The full-cohort run (100/100, threshold 10000) was done on 2026-10-22: 653s.
 runs:
-  - {treated_pct: 100, control_pct: 100, threshold: 10000}
+  - {treated_pct: 1, control_pct: 1, threshold: 10000}
+  - {treated_pct: 5, control_pct: 5, threshold: 10000}
+  - {treated_pct: 10, control_pct: 10, threshold: 10000}
+  - {treated_pct: 25, control_pct: 25, threshold: 10000}
+  - {treated_pct: 50, control_pct: 50, threshold: 10000}
+  # Later sweeps, once Shawn has picked what matters:
   # - {treated_pct: 100, control_pct: 100, threshold: 1000}
   # - {treated_pct: 100, control_pct: 100, threshold: 300}
   # - {treated_pct: 25, control_pct: 100, threshold: 10000}

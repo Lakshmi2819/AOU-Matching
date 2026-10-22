@@ -148,7 +148,8 @@ else:
 # would leak the same difference; it is only informative for k:1 / replacement.
 if ratio_k > 1 or cfg.get("with_replacement"):
     print(f"[match] controls used: {fmt_n(n_c_matched)}")
-for line in format_bucket_stats(collect_bucket_stats(bucket_stats), min_cell):
+for line in format_bucket_stats(collect_bucket_stats(bucket_stats), min_cell,
+                                n_total=u[True]["n"] + u[False]["n"], n_treated=u[True]["n"]):
     print(line)
 
 # --- 3. balance ----------------------------------------------------------------
