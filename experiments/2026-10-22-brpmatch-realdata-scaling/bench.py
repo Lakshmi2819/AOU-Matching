@@ -7,11 +7,19 @@
      across runs.
   3. Runs: for each entry in config `runs`, keep a deterministic hash-based
      share of treated and of controls (person_id mod 100; sets size and ratio),
-     match with the given rebucket threshold, and report match rate, covariate
-     balance (SMD computed in Spark, not via match_summary(), which collects
-     the whole cohort to the driver), bucket stats and wall time.
+     match with the given rebucket threshold and n_neighbors, and report match
+     rate, covariate balance (SMD computed in Spark, not via match_summary(),
+     which collects the whole cohort to the driver), bucket stats, wall time,
+     and diagnostics on the unmatched:
+       - best possible matches inside buckets (sum of min(treated, controls))
+         vs actual: how much the k-NN candidate limit costs;
+       - SMD of unmatched treated vs unused controls: do the unmatched look
+         like the leftover controls (avoidable losses) or not (hard to match);
+       - unmatched treated sharing a coarse cell (exact group x birth band x
+         condition-count quantile) with at least one unused control.
 
-Aggregate output only; participant counts from 1 to min_cell-1 are suppressed.
+Aggregate output only; participant counts from 1 to min_cell (inclusive) are
+suppressed and shown as "≤min_cell".
 """
 from __future__ import annotations
 
@@ -25,7 +33,7 @@ import pyspark.sql.functions as F
 import yaml
 from brpmatch import generate_features, match
 
-from utilities.brpmatch_report import collect_bucket_stats, format_bucket_stats
+from utilities.brpmatch_report import collect_bucket_stats, format_bucket_stats, format_match_gap
 from utilities.spark import get_spark, load_cohort, ship_package
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -40,12 +48,25 @@ cat_cols = cfg.get("categorical_cols", [])
 FEATURE_SUFFIXES = ("__num", "__cat", "__exact", "__date")
 
 
+HIDDEN = f"≤{min_cell}"
+
+
 def small(n) -> bool:
-    return 0 < n < min_cell
+    """Counts from 1 to min_cell inclusive are never shown."""
+    return 0 < n <= min_cell
 
 
 def fmt_n(n) -> str:
-    return f"<{min_cell}" if small(n) else f"{int(n):,}"
+    return HIDDEN if small(n) else f"{int(n):,}"
+
+
+def share(k, total) -> str:
+    """'k of total (pct)', without ever making a small count derivable."""
+    if small(total - k):
+        return f"all but {HIDDEN} of {fmt_n(total)}"
+    if small(k):
+        return f"{HIDDEN} of {fmt_n(total)}"
+    return f"{fmt_n(k)} of {fmt_n(total)} ({100 * k / max(total, 1):.1f}%)"
 
 
 def keep_share(id_col: str, pct: float):
@@ -55,6 +76,70 @@ def keep_share(id_col: str, pct: float):
     (experiments/2026-10-22-matchit-realdata) selects exactly the same people.
     """
     return F.pmod(F.col(id_col).cast("long"), F.lit(100)) < F.lit(pct)
+
+
+def smd_between(df, flag, cols):
+    """Per-covariate SMD between rows with flag == 1 and flag == 0 (unweighted,
+    brpmatch's compute_smd() definition)."""
+    aggs = []
+    for i, c in enumerate(cols):
+        for g, m in (("a", F.col(flag) == 1), ("b", F.col(flag) == 0)):
+            aggs += [F.avg(F.when(m, F.col(c))).alias(f"m{g}{i}"),
+                     F.var_samp(F.when(m, F.col(c))).alias(f"v{g}{i}")]
+    r = df.agg(*aggs).collect()[0]
+    out = {}
+    for i, c in enumerate(cols):
+        sd = (((r[f"va{i}"] or 0) + (r[f"vb{i}"] or 0)) / 2) ** 0.5
+        ok = sd >= 1e-10 and r[f"ma{i}"] is not None and r[f"mb{i}"] is not None
+        out[c.rsplit("__", 1)[0]] = (r[f"ma{i}"] - r[f"mb{i}"]) / sd if ok else 0.0
+    return out
+
+
+def diagnose(sub, units, bstats, cols, n_t, n_matched, label):
+    """Is the unmatched loss avoidable? Aggregate lines only."""
+    dcfg = cfg.get("diagnostics", {})
+    out = []
+
+    # 1. Best possible 1:1 within the buckets match() formed vs actual.
+    # format_match_gap hides any of best / gap / unmatchable that could reveal a
+    # small count through the others.
+    best = bstats.agg(F.sum(F.least("num_treated", "num_control")).alias("b")).collect()[0]["b"] or 0
+    out.append(f"{label} " + format_match_gap(best, n_matched, n_t, min_cell, inclusive=True))
+
+    # 2. Unmatched treated vs unused controls.
+    lab = sub.join(units.select(F.col("id").alias("person_id__id"), "weight"), "person_id__id")
+    left = lab.filter(F.col("weight") == 0).cache()
+    c = left.agg(F.sum("treat__treat").alias("t"), F.count("*").alias("n")).collect()[0]
+    n_ut, n_uc = c["t"] or 0, (c["n"] or 0) - (c["t"] or 0)
+    if n_ut <= min_cell or n_uc <= min_cell:
+        out.append(f"{label} [diag] unmatched treated {fmt_n(n_ut)}, unused controls {fmt_n(n_uc)}: "
+                   f"too few to compare (SMD suppressed)")
+    else:
+        left_smd = smd_between(left, "treat__treat", cols)
+        all_smd = smd_between(sub, "treat__treat", cols)
+        worst = max(left_smd, key=lambda k: abs(left_smd[k]))
+        nums = ", ".join(f"{k} {left_smd[k]:.3f}" for k in num_cols if k in left_smd)
+        out.append(f"{label} [diag] unmatched treated {fmt_n(n_ut)} vs unused controls {fmt_n(n_uc)}: "
+                   f"max |SMD| {abs(left_smd[worst]):.3f} ({worst}); {nums} "
+                   f"(all treated vs all controls: max |SMD| {max(map(abs, all_smd.values())):.3f})")
+
+        # 3. Unmatched treated sharing a coarse cell with >= 1 unused control.
+        q = dcfg.get("condition_quantiles", 5)
+        band = dcfg.get("birth_band_years", 5)
+        yob = f"{dcfg.get('birth_col', 'year_of_birth')}__num"
+        cond = f"{dcfg.get('conditions_col', 'log_conditions')}__num"
+        cuts = sub.approxQuantile(cond, [i / q for i in range(1, q)], 0.001)
+        qbin = sum((F.when(F.col(cond) > cut, 1).otherwise(0) for cut in cuts), F.lit(0))
+        left = left.withColumn("_cell", F.concat_ws(
+            "|", F.col("exact_match__group").cast("string"),
+            F.floor(F.col(yob) / band).cast("string"), qbin.cast("string")))
+        unused_cells = left.filter(F.col("treat__treat") == 0).select("_cell").distinct()
+        n_share = (left.filter(F.col("treat__treat") == 1)
+                   .join(unused_cells, "_cell", "left_semi").count())
+        out.append(f"{label} [diag] unmatched treated sharing a cell (exact group x {band}-yr birth band "
+                   f"x {q} condition-count quantiles) with >=1 unused control: {share(n_share, n_ut)}")
+    left.unpersist()
+    return out
 
 
 def balance(feats, units, cols):
@@ -121,7 +206,7 @@ df = df.select(
 # Merge categories too small to show safely (in either group) into "other".
 for c in exact_cols + cat_cols:
     counts = df.groupBy(c).agg(F.sum("treat").alias("t"), F.sum(1 - F.col("treat")).alias("u")).collect()
-    rare = [r[c] for r in counts if min(r["t"], r["u"]) < min_cell and r[c] is not None]
+    rare = [r[c] for r in counts if min(r["t"], r["u"]) <= min_cell and r[c] is not None]
     if rare:
         df = df.withColumn(c, F.when(F.col(c).isin(rare), F.lit("other")).otherwise(F.col(c)))
 df = df.orderBy("person_id").cache()
@@ -141,12 +226,13 @@ feat_cols = [c for c in feats.columns if c.endswith(FEATURE_SUFFIXES)]
 print(f"[cohort] {len(feat_cols)} feature columns; exact on {', '.join(exact_cols) or 'nothing'}; "
       f"{cfg.get('feature_space', 'mahalanobis')}, 1:{cfg.get('ratio_k', 1)}, "
       f"{'with' if cfg.get('with_replacement') else 'without'} replacement, "
-      f"n_neighbors {cfg.get('n_neighbors', 5)}")
+      f"n_neighbors {cfg.get('n_neighbors', 5)} (default; per-run overrides in labels)")
 
 # --- 3. runs ------------------------------------------------------------------------
 for r in cfg["runs"]:
     tp, cp, thr = r["treated_pct"], r["control_pct"], r["threshold"]
-    label = f"[run t{tp}% c{cp}% thr{thr}]"
+    k_nn = r.get("n_neighbors", cfg.get("n_neighbors", 5))
+    label = f"[run t{tp}% c{cp}% thr{thr} k{k_nn}]"
     sub = feats.filter(
         ((F.col("treat__treat") == 1) & keep_share("person_id__id", tp))
         | ((F.col("treat__treat") == 0) & keep_share("person_id__id", cp))
@@ -160,7 +246,7 @@ for r in cfg["runs"]:
         feature_space=cfg.get("feature_space", "mahalanobis"),
         ratio_k=cfg.get("ratio_k", 1),
         with_replacement=cfg.get("with_replacement", False),
-        n_neighbors=cfg.get("n_neighbors", 5),
+        n_neighbors=k_nn,
         num_patients_trigger_rebucket=thr,
         seed=cfg.get("seed", 42),
         verbose=False,  # its per-bucket printout can include small counts
@@ -170,14 +256,18 @@ for r in cfg["runs"]:
     secs = time.perf_counter() - t0
 
     unmatched = n_t - n_matched
-    rate = (f"all but <{min_cell}" if small(unmatched)
+    rate = (f"all but {HIDDEN}" if small(unmatched)
             else f"{100 * n_matched / n_t:.1f}% ({fmt_n(unmatched)} unmatched)")
     smd_before, smd_after, worst = balance(sub, units, feat_cols)
     print(f"{label} treated {fmt_n(n_t)}, controls {fmt_n(n_c)} (1:{n_c / max(n_t, 1):.1f}); "
           f"matched {rate}; max |SMD| {smd_before:.3f} -> {smd_after:.3f} ({worst}); "
           f"match wall time {secs:.0f}s")
-    for line in format_bucket_stats(collect_bucket_stats(bstats), min_cell, n_total=n_t + n_c, n_treated=n_t):
+    for line in format_bucket_stats(collect_bucket_stats(bstats), min_cell, n_total=n_t + n_c,
+                                    n_treated=n_t, inclusive=True):
         print(line.replace("[buckets]", f"{label} [buckets]", 1))
+    if r.get("diagnostics", cfg.get("diagnostics", {}).get("enabled", True)):
+        for line in diagnose(sub, units, bstats, feat_cols, n_t, n_matched, label):
+            print(line)
     units.unpersist()
     sub.unpersist()
 

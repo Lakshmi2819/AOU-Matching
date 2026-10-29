@@ -40,17 +40,27 @@ def collect_bucket_stats(bucket_stats) -> dict:
 
 
 def format_bucket_stats(s: dict, min_cell: int = 20,
-                        n_total: int | None = None, n_treated: int | None = None) -> list[str]:
-    """n_total / n_treated: the cohort that went into match(), for coverage."""
+                        n_total: int | None = None, n_treated: int | None = None,
+                        inclusive: bool = False) -> list[str]:
+    """n_total / n_treated: the cohort that went into match(), for coverage.
+
+    Counts from 1 to min_cell-1 are suppressed ("<min_cell"); with
+    inclusive=True, min_cell itself is suppressed too ("≤min_cell").
+    """
+    def small(x) -> bool:
+        return 0 < x <= min_cell if inclusive else 0 < x < min_cell
+
+    hidden = f"≤{min_cell}" if inclusive else f"<{min_cell}"
+
     def n(x) -> str:  # a participant count
         x = int(round(x or 0))
-        return f"<{min_cell}" if 0 < x < min_cell else f"{x:,}"
+        return hidden if small(x) else f"{x:,}"
 
     def covered(inside, total) -> str:
         # Never print inside and total together when their difference is small.
         outside = total - inside
-        if 0 < outside < min_cell:
-            return f"all but <{min_cell} of {n(total)}"
+        if small(outside):
+            return f"all but {hidden} of {n(total)}"
         return f"{n(inside)} of {n(total)} ({n(outside)} outside)"
 
     p5, p25, p50, p75, p95 = s["q"]
@@ -70,3 +80,39 @@ def format_bucket_stats(s: dict, min_cell: int = 20,
         f"[buckets] seconds per bucket: total {s['sec_total']:.1f}, mean {s['sec_mean']:.2f}, "
         f"median {s['sec_q'][0]:.2f}, p95 {s['sec_q'][1]:.2f}, max {s['sec_max']:.2f}")
     return out
+
+
+def format_match_gap(best: int, actual: int, n_t: int, min_cell: int = 20,
+                     inclusive: bool = False) -> str:
+    """Best possible 1:1 matches within buckets vs actual, small-cell safe.
+
+    best = sum over buckets of min(treated, controls); actual = matched treated;
+    n_t = treated. Three counts are derivable from each other (gap = best -
+    actual, unmatchable = n_t - best), so whenever one of them is small, the
+    others that would reveal it are hidden too.
+    """
+    def small(x) -> bool:
+        return 0 < x <= min_cell if inclusive else 0 < x < min_cell
+
+    hidden = f"≤{min_cell}" if inclusive else f"<{min_cell}"
+
+    def n(x) -> str:
+        return hidden if small(x) else f"{int(x):,}"
+
+    def share(k, total) -> str:
+        if small(total - k):
+            return f"all but {hidden} of {n(total)}"
+        if small(k):
+            return f"{hidden} of {n(total)}"
+        return f"{n(k)} of {n(total)} ({100 * k / max(total, 1):.1f}%)"
+
+    gap, unmatched, unmatchable = best - actual, n_t - actual, n_t - best
+    if small(gap):
+        return (f"[diag] actual matched {share(actual, n_t)}, within {hidden} of best "
+                f"possible within buckets")
+    if small(unmatchable):
+        return (f"[diag] best possible within buckets: all but {hidden} of {n(n_t)} treated; "
+                f"actual matched {share(actual, n_t)}; candidate-limit loss: all but {hidden} "
+                f"of the {n(unmatched)} unmatched")
+    return (f"[diag] best possible within buckets: {share(best, n_t)}; actual matched "
+            f"{share(actual, n_t)}; candidate-limit loss {n(gap)}")

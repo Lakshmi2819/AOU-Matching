@@ -21,20 +21,31 @@ n_neighbors: 5
 # One matching run per entry, on the same cached cohort. treated_pct /
 # control_pct keep people with person_id mod 100 < pct in each group (the
 # same rule as the MatchIt comparison, so both match identical subsets);
-# threshold = rebucket threshold.
-# Size ladder for the BRPMatch vs MatchIt comparison (ratio stays ~1:1.1).
-# The full-cohort run (100/100, threshold 10000) was done on 2026-10-22: 653s.
+# threshold = rebucket threshold; n_neighbors overrides the default above.
+#
+# Current step: one full-cohort run at n_neighbors 5 with the unmatched
+# diagnostics, to tell avoidable losses from treated that are hard to match.
 runs:
-  - {treated_pct: 1, control_pct: 1, threshold: 10000}
-  - {treated_pct: 5, control_pct: 5, threshold: 10000}
-  - {treated_pct: 10, control_pct: 10, threshold: 10000}
-  - {treated_pct: 25, control_pct: 25, threshold: 10000}
-  - {treated_pct: 50, control_pct: 50, threshold: 10000}
-  # Later sweeps, once Shawn has picked what matters:
-  # - {treated_pct: 100, control_pct: 100, threshold: 1000}
-  # - {treated_pct: 100, control_pct: 100, threshold: 300}
-  # - {treated_pct: 25, control_pct: 100, threshold: 10000}
-  # - {treated_pct: 5, control_pct: 100, threshold: 10000}
+  - {treated_pct: 100, control_pct: 100, threshold: 10000, n_neighbors: 5}
+  # Only if best possible within buckets is well above actual matched:
+  # - {treated_pct: 100, control_pct: 100, threshold: 10000, n_neighbors: 20}
+  # - {treated_pct: 100, control_pct: 100, threshold: 10000, n_neighbors: 50}
+  # Done 2026-10-22 (size ladder for the MatchIt comparison; see README):
+  # - {treated_pct: 1, control_pct: 1, threshold: 10000}
+  # - {treated_pct: 5, control_pct: 5, threshold: 10000}
+  # - {treated_pct: 10, control_pct: 10, threshold: 10000}
+  # - {treated_pct: 25, control_pct: 25, threshold: 10000}
+  # - {treated_pct: 50, control_pct: 50, threshold: 10000}
 
-# AoU dissemination policy: never display a participant count from 1 to 19.
+# Unmatched diagnostics (per run): coarse cell = exact-match group x
+# birth_band_years band of birth_col x condition_quantiles quantile bins of
+# conditions_col.
+diagnostics:
+  enabled: true
+  birth_col: year_of_birth
+  conditions_col: log_conditions
+  birth_band_years: 5
+  condition_quantiles: 5
+
+# Suppression: participant counts from 1 to min_cell (inclusive) are never shown.
 min_cell: 20

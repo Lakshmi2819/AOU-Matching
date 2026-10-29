@@ -44,3 +44,41 @@ def test_small_outside_count_is_not_derivable():
 
 def test_every_line_is_tagged():
     assert all(l.startswith("[buckets] ") for l in format_bucket_stats(STATS, min_cell=20))
+
+
+def test_inclusive_suppression_hides_min_cell_itself():
+    s = dict(STATS, min=20, max_treated=20)
+    text = "\n".join(format_bucket_stats(s, min_cell=20, inclusive=True,
+                                         n_total=430_094, n_treated=430_074 - 100))
+    assert "min ≤20" in text
+    assert "largest exposed group in any bucket ≤20" in text
+    assert " 20," not in text and "<20" not in text
+
+
+from utilities.brpmatch_report import format_match_gap  # noqa: E402
+
+
+def _numbers(text):
+    import re
+    return [int(x.replace(",", "")) for x in re.findall(r"(?<![≤<\d])\d[\d,]*(?![\d.%])", text)]
+
+
+def test_match_gap_hides_best_when_it_is_almost_everyone():
+    # best = 798 of 802 (4 unmatchable): neither best nor the gap may be shown,
+    # else 802 - (569 + 229) recovers the 4.
+    text = format_match_gap(best=798, actual=569, n_t=802, min_cell=20, inclusive=True)
+    assert "all but ≤20" in text
+    assert 798 not in _numbers(text) and 229 not in _numbers(text)
+    assert "569" in text
+
+
+def test_match_gap_hides_small_loss():
+    text = format_match_gap(best=1000, actual=990, n_t=1500, min_cell=20, inclusive=True)
+    assert "within ≤20 of best possible" in text
+    assert 1000 not in _numbers(text) and 10 not in _numbers(text)
+
+
+def test_match_gap_shows_everything_when_safe():
+    text = format_match_gap(best=200_000, actual=108_000, n_t=204_840, min_cell=20, inclusive=True)
+    assert "200,000 of 204,840" in text and "108,000 of 204,840" in text
+    assert "candidate-limit loss 92,000" in text
