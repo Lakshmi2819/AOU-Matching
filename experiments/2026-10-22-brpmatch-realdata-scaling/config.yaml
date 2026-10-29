@@ -27,9 +27,9 @@ n_neighbors: 5
 # diagnostics, to tell avoidable losses from treated that are hard to match.
 runs:
   - {treated_pct: 100, control_pct: 100, threshold: 10000, n_neighbors: 5}
-  # Only if best possible within buckets is well above actual matched:
-  # - {treated_pct: 100, control_pct: 100, threshold: 10000, n_neighbors: 20}
-  # - {treated_pct: 100, control_pct: 100, threshold: 10000, n_neighbors: 50}
+  # 2026-10-29: best possible 65.1% vs actual 52.8% (loss 25,262), so one run
+  # at 20 to see how much of that loss more candidates recover (50 skipped).
+  - {treated_pct: 100, control_pct: 100, threshold: 10000, n_neighbors: 20}
   # Done 2026-10-22 (size ladder for the MatchIt comparison; see README):
   # - {treated_pct: 1, control_pct: 1, threshold: 10000}
   # - {treated_pct: 5, control_pct: 5, threshold: 10000}
@@ -46,6 +46,11 @@ diagnostics:
   conditions_col: log_conditions
   birth_band_years: 5
   condition_quantiles: 5
+  # Capacity across the whole cohort: sum over cells of min(unmatched treated,
+  # unused controls), one line per granularity.
+  capacity_cells:
+    - {birth_band_years: 5, condition_quantiles: 5}
+    - {birth_band_years: 2, condition_quantiles: 10}
 
 # Suppression: participant counts from 1 to min_cell (inclusive) are never shown.
 min_cell: 20

@@ -116,3 +116,44 @@ def format_match_gap(best: int, actual: int, n_t: int, min_cell: int = 20,
                 f"of the {n(unmatched)} unmatched")
     return (f"[diag] best possible within buckets: {share(best, n_t)}; actual matched "
             f"{share(actual, n_t)}; candidate-limit loss {n(gap)}")
+
+
+def format_cell_capacity(desc: str, capacity: int, best: int, actual: int, n_t: int,
+                         min_cell: int = 20, inclusive: bool = False) -> str:
+    """Cohort-wide cell capacity next to total unmatched and the in-bucket loss.
+
+    capacity = sum over coarse cells (whole cohort, ignoring buckets) of
+    min(unmatched treated, unused controls): how many unmatched treated could
+    still be paired 1:1 with a leftover control that is similar on the cell
+    variables. Shown with the same derivation guards as format_match_gap:
+    the in-bucket loss is hidden whenever format_match_gap hides it, and
+    capacity is hidden when it is within min_cell of the unmatched total or of
+    the loss.
+    """
+    def small(x) -> bool:
+        return 0 < x <= min_cell if inclusive else 0 < x < min_cell
+
+    hidden = f"≤{min_cell}" if inclusive else f"<{min_cell}"
+
+    def n(x) -> str:
+        return hidden if small(x) else f"{int(x):,}"
+
+    gap, unmatched, unmatchable = best - actual, n_t - actual, n_t - best
+    gap_hidden = small(gap) or small(unmatchable)
+    if small(gap):
+        loss = f"within {hidden} of 0"
+    elif small(unmatchable):
+        loss = f"all but {hidden} of the {n(unmatched)} unmatched"
+    else:
+        loss = n(gap)
+
+    if small(unmatched - capacity):
+        cap = f"all but {hidden} of the {n(unmatched)} unmatched"
+    elif not gap_hidden and small(abs(capacity - gap)):
+        cap = f"within {hidden} of the in-bucket candidate-limit loss, of the {n(unmatched)} unmatched"
+    elif small(capacity):
+        cap = f"{hidden} of the {n(unmatched)} unmatched"
+    else:
+        cap = f"{n(capacity)} of the {n(unmatched)} unmatched ({100 * capacity / max(unmatched, 1):.1f}%)"
+    return (f"[diag] capacity within cells ({desc}, whole cohort): {cap}; "
+            f"in-bucket candidate-limit loss {loss}")

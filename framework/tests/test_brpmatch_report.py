@@ -82,3 +82,35 @@ def test_match_gap_shows_everything_when_safe():
     text = format_match_gap(best=200_000, actual=108_000, n_t=204_840, min_cell=20, inclusive=True)
     assert "200,000 of 204,840" in text and "108,000 of 204,840" in text
     assert "candidate-limit loss 92,000" in text
+
+
+from utilities.brpmatch_report import format_cell_capacity  # noqa: E402
+
+AOU = dict(best=133_333, actual=108_071, n_t=204_840)  # loss 25,262; unmatched 96,769
+
+
+def test_cell_capacity_safe_case():
+    text = format_cell_capacity("5-yr x 5q", capacity=20_000, min_cell=20, inclusive=True, **AOU)
+    assert "[diag] capacity within cells (5-yr x 5q, whole cohort)" in text
+    assert "20,000 of the 96,769 unmatched (20.7%)" in text
+    assert "in-bucket candidate-limit loss 25,262" in text
+
+
+def test_cell_capacity_hides_small_remainder():
+    text = format_cell_capacity("x", capacity=96_760, min_cell=20, inclusive=True, **AOU)
+    assert "all but ≤20 of the 96,769 unmatched" in text and 96_760 not in _numbers(text)
+
+
+def test_cell_capacity_hides_value_close_to_loss():
+    # capacity 25,270 next to loss 25,262 would reveal a difference of 8.
+    text = format_cell_capacity("x", capacity=25_270, min_cell=20, inclusive=True, **AOU)
+    assert "within ≤20 of the in-bucket candidate-limit loss" in text
+    assert 25_270 not in _numbers(text)
+
+
+def test_cell_capacity_hides_loss_when_match_gap_does():
+    # Same counts as the leak case: loss must stay hidden here too.
+    text = format_cell_capacity("x", capacity=100, best=798, actual=569, n_t=802,
+                                min_cell=20, inclusive=True)
+    assert 229 not in _numbers(text) and 798 not in _numbers(text)
+    assert "100 of the 233 unmatched" in text

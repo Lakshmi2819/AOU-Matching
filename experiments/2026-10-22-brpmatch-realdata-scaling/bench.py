@@ -16,7 +16,10 @@
        - SMD of unmatched treated vs unused controls: do the unmatched look
          like the leftover controls (avoidable losses) or not (hard to match);
        - unmatched treated sharing a coarse cell (exact group x birth band x
-         condition-count quantile) with at least one unused control.
+         condition-count quantile) with at least one unused control;
+       - capacity across the whole cohort (ignoring buckets): sum over cells of
+         min(unmatched treated, unused controls), at each configured
+         granularity, next to the unmatched total and the in-bucket loss.
 
 Aggregate output only; participant counts from 1 to min_cell (inclusive) are
 suppressed and shown as "≤min_cell".
@@ -33,7 +36,8 @@ import pyspark.sql.functions as F
 import yaml
 from brpmatch import generate_features, match
 
-from utilities.brpmatch_report import collect_bucket_stats, format_bucket_stats, format_match_gap
+from utilities.brpmatch_report import (collect_bucket_stats, format_bucket_stats, format_cell_capacity,
+                                       format_match_gap)
 from utilities.spark import get_spark, load_cohort, ship_package
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -95,6 +99,18 @@ def smd_between(df, flag, cols):
     return out
 
 
+def cell_key(sub, band, q):
+    """Coarse cell: exact-match group x band-year birth band x q quantile bins of
+    condition count; quantile cut points come from the whole run cohort."""
+    dcfg = cfg.get("diagnostics", {})
+    yob = f"{dcfg.get('birth_col', 'year_of_birth')}__num"
+    cond = f"{dcfg.get('conditions_col', 'log_conditions')}__num"
+    cuts = sub.approxQuantile(cond, [i / q for i in range(1, q)], 0.001)
+    qbin = sum((F.when(F.col(cond) > cut, 1).otherwise(0) for cut in cuts), F.lit(0))
+    return F.concat_ws("|", F.col("exact_match__group").cast("string"),
+                       F.floor(F.col(yob) / band).cast("string"), qbin.cast("string"))
+
+
 def diagnose(sub, units, bstats, cols, n_t, n_matched, label):
     """Is the unmatched loss avoidable? Aggregate lines only."""
     dcfg = cfg.get("diagnostics", {})
@@ -126,18 +142,24 @@ def diagnose(sub, units, bstats, cols, n_t, n_matched, label):
         # 3. Unmatched treated sharing a coarse cell with >= 1 unused control.
         q = dcfg.get("condition_quantiles", 5)
         band = dcfg.get("birth_band_years", 5)
-        yob = f"{dcfg.get('birth_col', 'year_of_birth')}__num"
-        cond = f"{dcfg.get('conditions_col', 'log_conditions')}__num"
-        cuts = sub.approxQuantile(cond, [i / q for i in range(1, q)], 0.001)
-        qbin = sum((F.when(F.col(cond) > cut, 1).otherwise(0) for cut in cuts), F.lit(0))
-        left = left.withColumn("_cell", F.concat_ws(
-            "|", F.col("exact_match__group").cast("string"),
-            F.floor(F.col(yob) / band).cast("string"), qbin.cast("string")))
-        unused_cells = left.filter(F.col("treat__treat") == 0).select("_cell").distinct()
-        n_share = (left.filter(F.col("treat__treat") == 1)
+        cells = left.withColumn("_cell", cell_key(sub, band, q))
+        unused_cells = cells.filter(F.col("treat__treat") == 0).select("_cell").distinct()
+        n_share = (cells.filter(F.col("treat__treat") == 1)
                    .join(unused_cells, "_cell", "left_semi").count())
         out.append(f"{label} [diag] unmatched treated sharing a cell (exact group x {band}-yr birth band "
                    f"x {q} condition-count quantiles) with >=1 unused control: {share(n_share, n_ut)}")
+
+        # 4. Capacity across the whole cohort (ignoring buckets): sum over cells
+        # of min(unmatched treated, unused controls), at each granularity.
+        for g in dcfg.get("capacity_cells", [{"birth_band_years": band, "condition_quantiles": q}]):
+            gb, gq = g["birth_band_years"], g["condition_quantiles"]
+            per_cell = (left.withColumn("_cell", cell_key(sub, gb, gq)).groupBy("_cell")
+                        .agg(F.sum("treat__treat").alias("t"),
+                             F.sum(1 - F.col("treat__treat")).alias("c")))
+            capacity = per_cell.agg(F.sum(F.least("t", "c")).alias("k")).collect()[0]["k"] or 0
+            out.append(f"{label} " + format_cell_capacity(
+                f"exact group x {gb}-yr birth band x {gq} condition-count quantiles",
+                capacity, best, n_matched, n_t, min_cell, inclusive=True))
     left.unpersist()
     return out
 
