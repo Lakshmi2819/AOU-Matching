@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import traceback
 from pathlib import Path
 
 import brpmatch
@@ -111,57 +112,89 @@ def cell_key(sub, band, q):
                        F.floor(F.col(yob) / band).cast("string"), qbin.cast("string"))
 
 
+def guarded(name, label, fn):
+    """Run one diagnostic; on failure print which one and the traceback (code
+    lines, no data) and carry on, so one diagnostic can't end the session."""
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001 - report and continue
+        print(f"{label} [diag] {name} FAILED: {type(e).__name__}; run continues", flush=True)
+        traceback.print_exc(file=sys.stdout)
+        return None
+
+
 def diagnose(sub, units, bstats, cols, n_t, n_matched, label):
-    """Is the unmatched loss avoidable? Aggregate lines only."""
+    """Is the unmatched loss avoidable? Each diagnostic prints as soon as it is
+    ready and is guarded separately, so a failure loses only that line."""
     dcfg = cfg.get("diagnostics", {})
-    out = []
+    q = dcfg.get("condition_quantiles", 5)
+    band = dcfg.get("birth_band_years", 5)
 
     # 1. Best possible 1:1 within the buckets match() formed vs actual.
     # format_match_gap hides any of best / gap / unmatchable that could reveal a
     # small count through the others.
-    best = bstats.agg(F.sum(F.least("num_treated", "num_control")).alias("b")).collect()[0]["b"] or 0
-    out.append(f"{label} " + format_match_gap(best, n_matched, n_t, min_cell, inclusive=True))
+    def match_gap():
+        b = bstats.agg(F.sum(F.least("num_treated", "num_control")).alias("b")).collect()[0]["b"] or 0
+        print(f"{label} " + format_match_gap(b, n_matched, n_t, min_cell, inclusive=True), flush=True)
+        return b
 
-    # 2. Unmatched treated vs unused controls.
+    best = guarded("best possible within buckets", label, match_gap)
+
     lab = sub.join(units.select(F.col("id").alias("person_id__id"), "weight"), "person_id__id")
     left = lab.filter(F.col("weight") == 0).cache()
-    c = left.agg(F.sum("treat__treat").alias("t"), F.count("*").alias("n")).collect()[0]
-    n_ut, n_uc = c["t"] or 0, (c["n"] or 0) - (c["t"] or 0)
-    if n_ut <= min_cell or n_uc <= min_cell:
-        out.append(f"{label} [diag] unmatched treated {fmt_n(n_ut)}, unused controls {fmt_n(n_uc)}: "
-                   f"too few to compare (SMD suppressed)")
-    else:
-        left_smd = smd_between(left, "treat__treat", cols)
-        all_smd = smd_between(sub, "treat__treat", cols)
-        worst = max(left_smd, key=lambda k: abs(left_smd[k]))
-        nums = ", ".join(f"{k} {left_smd[k]:.3f}" for k in num_cols if k in left_smd)
-        out.append(f"{label} [diag] unmatched treated {fmt_n(n_ut)} vs unused controls {fmt_n(n_uc)}: "
-                   f"max |SMD| {abs(left_smd[worst]):.3f} ({worst}); {nums} "
-                   f"(all treated vs all controls: max |SMD| {max(map(abs, all_smd.values())):.3f})")
+    try:
+        c = left.agg(F.sum("treat__treat").alias("t"), F.count("*").alias("n")).collect()[0]
+        n_ut, n_uc = c["t"] or 0, (c["n"] or 0) - (c["t"] or 0)
+        if n_ut <= min_cell or n_uc <= min_cell:
+            print(f"{label} [diag] unmatched treated {fmt_n(n_ut)}, unused controls {fmt_n(n_uc)}: "
+                  f"too few to compare (diagnostics 2-4 suppressed)", flush=True)
+            return
+
+        # 2. Unmatched treated vs unused controls.
+        def unmatched_smd():
+            left_smd = smd_between(left, "treat__treat", cols)
+            all_smd = smd_between(sub, "treat__treat", cols)
+            worst = max(left_smd, key=lambda k: abs(left_smd[k]))
+            nums = ", ".join(f"{k} {left_smd[k]:.3f}" for k in num_cols if k in left_smd)
+            print(f"{label} [diag] unmatched treated {fmt_n(n_ut)} vs unused controls {fmt_n(n_uc)}: "
+                  f"max |SMD| {abs(left_smd[worst]):.3f} ({worst}); {nums} "
+                  f"(all treated vs all controls: max |SMD| {max(map(abs, all_smd.values())):.3f})",
+                  flush=True)
+
+        guarded("unmatched vs unused SMD", label, unmatched_smd)
 
         # 3. Unmatched treated sharing a coarse cell with >= 1 unused control.
-        q = dcfg.get("condition_quantiles", 5)
-        band = dcfg.get("birth_band_years", 5)
-        cells = left.withColumn("_cell", cell_key(sub, band, q))
-        unused_cells = cells.filter(F.col("treat__treat") == 0).select("_cell").distinct()
-        n_share = (cells.filter(F.col("treat__treat") == 1)
-                   .join(unused_cells, "_cell", "left_semi").count())
-        out.append(f"{label} [diag] unmatched treated sharing a cell (exact group x {band}-yr birth band "
-                   f"x {q} condition-count quantiles) with >=1 unused control: {share(n_share, n_ut)}")
+        def cell_share():
+            cells = left.withColumn("_cell", cell_key(sub, band, q))
+            unused_cells = cells.filter(F.col("treat__treat") == 0).select("_cell").distinct()
+            n_share = (cells.filter(F.col("treat__treat") == 1)
+                       .join(unused_cells, "_cell", "left_semi").count())
+            print(f"{label} [diag] unmatched treated sharing a cell (exact group x {band}-yr birth band "
+                  f"x {q} condition-count quantiles) with >=1 unused control: {share(n_share, n_ut)}",
+                  flush=True)
+
+        guarded("cell share", label, cell_share)
 
         # 4. Capacity across the whole cohort (ignoring buckets): sum over cells
         # of min(unmatched treated, unused controls), at each granularity.
+        if best is None:
+            print(f"{label} [diag] capacity skipped: needs diagnostic 1", flush=True)
+            return
         for g in dcfg.get("capacity_cells", [{"birth_band_years": band, "condition_quantiles": q}]):
             gb, gq = g["birth_band_years"], g["condition_quantiles"]
-            per_cell = (left.withColumn("_cell", cell_key(sub, gb, gq)).groupBy("_cell")
-                        .agg(F.sum("treat__treat").alias("t"),
-                             F.sum(1 - F.col("treat__treat")).alias("c")))
-            capacity = per_cell.agg(F.sum(F.least("t", "c")).alias("k")).collect()[0]["k"] or 0
-            out.append(f"{label} " + format_cell_capacity(
-                f"exact group x {gb}-yr birth band x {gq} condition-count quantiles",
-                capacity, best, n_matched, n_t, min_cell, inclusive=True))
-    left.unpersist()
-    return out
+
+            def capacity_line(gb=gb, gq=gq):
+                per_cell = (left.withColumn("_cell", cell_key(sub, gb, gq)).groupBy("_cell")
+                            .agg(F.sum("treat__treat").alias("t"),
+                                 F.sum(1 - F.col("treat__treat")).alias("c")))
+                capacity = per_cell.agg(F.sum(F.least("t", "c")).alias("k")).collect()[0]["k"] or 0
+                print(f"{label} " + format_cell_capacity(
+                    f"exact group x {gb}-yr birth band x {gq} condition-count quantiles",
+                    capacity, best, n_matched, n_t, min_cell, inclusive=True), flush=True)
+
+            guarded(f"capacity {gb}-yr x {gq}q", label, capacity_line)
+    finally:
+        left.unpersist()
 
 
 def balance(feats, units, cols):
@@ -288,8 +321,8 @@ for r in cfg["runs"]:
                                     n_treated=n_t, inclusive=True):
         print(line.replace("[buckets]", f"{label} [buckets]", 1))
     if r.get("diagnostics", cfg.get("diagnostics", {}).get("enabled", True)):
-        for line in diagnose(sub, units, bstats, feat_cols, n_t, n_matched, label):
-            print(line)
+        guarded("diagnostics", label,
+                lambda: diagnose(sub, units, bstats, feat_cols, n_t, n_matched, label))
     units.unpersist()
     sub.unpersist()
 
