@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 created: 2026-10-22
 ---
 
@@ -57,7 +57,39 @@ ulcer (4027663):
 BRPMatch on the same subsets: 25% matched 81.4% (max |SMD| 0.492), 50% matched
 77.0% (0.476).
 
-AoU: <paste the scrubbed runs/summary.md here>
+AoU CDR, 2026-10-22 (R 4.3.3, MatchIt 4.8.1, master node with 2 cores), next
+to the BRPMatch ladder on the same subsets (`2026-10-22-brpmatch-realdata-scaling`;
+the 100% BRPMatch row is its earlier full-cohort run):
+
+| Subset | Treated / controls | MatchIt time | BRPMatch time | MatchIt matched | BRPMatch matched | MatchIt max \|SMD\| after | BRPMatch max \|SMD\| after |
+|---|---|---|---|---|---|---|---|
+| 1% | 2,006 / 2,302 | 0 s | 442 s | 96.6% | 56.4% | 0.947 | 0.718 |
+| 5% | 10,255 / 11,326 | 5 s | 397 s | 94.2% | 56.6% | 0.886 | 0.576 |
+| 10% | 20,568 / 22,670 | 30 s | 419 s | 94.0% | 56.3% | 0.877 | 0.517 |
+| 25% | 51,368 / 56,362 | 288 s | 456 s | 93.4% | 55.1% | 0.875 | 0.409 |
+| 50% | 102,226 / 112,639 | 1,084 s | 493 s | 93.4% | 54.2% | 0.869 | 0.323 |
+| 100% | 204,840 / 225,254 | 4,371 s | 653 s | 93.2% | 52.8% | 0.867 | 0.232 |
 
 ## Interpretation
-<what you concluded; safe aggregate numbers only>
+- Same data on both sides: identical treated/control counts at every size
+  (person_id mod 100 subsets), same covariates, same settings.
+- **Time.** MatchIt is far faster on small cohorts, where BRPMatch's wall
+  time is mostly fixed Spark overhead (~400 s floor on this 2-worker cluster).
+  MatchIt grows roughly with size squared (about 4x per doubling: 288 ->
+  1,084 -> 4,371 s); BRPMatch barely grows (456 -> 493 -> 653 s). They cross
+  between 25% and 50% (~50-100k treated); on the full cohort BRPMatch is
+  ~6.7x faster.
+- **Match rate.** MatchIt matches ~93-97% (its unmatched are treated in exact
+  gender strata with fewer controls than treated); BRPMatch ~53-57% at every
+  size. The full-cohort diagnostics (brpmatch-realdata-scaling README) show
+  this is mostly a common-support limit: ~71.5k of the 96.8k unmatched are
+  excess treated in buckets with more treated than controls, the 5-candidate
+  limit costs at most ~25k, and only ~13% of the unmatched could be paired 1:1
+  with a leftover control in the same coarse cell.
+- **Balance.** BRPMatch's matched sample is much better balanced (max |SMD|
+  0.72 -> 0.23, improving with size); MatchIt's stays ~0.87-0.95, worst on
+  log_conditions: matching almost everyone at ~1:1 forces poor matches.
+- Caveats: compute differs (MatchIt is single-threaded R on the 2-vCPU master;
+  BRPMatch uses 2 Spark workers), the two may estimate the Mahalanobis
+  covariance differently, and the match rates differ so much that balance is
+  compared on different samples.
