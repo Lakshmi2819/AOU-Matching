@@ -6,7 +6,8 @@
 #   2. Runs: for each size in the ladder, keep person_id %% 100 < pct in each
 #      group (the same rule BRPMatch uses, so both match identical people),
 #      match with MatchIt (nearest, Mahalanobis, exact on gender), and report
-#      match rate, max |SMD| (brpmatch's definition), and wall time.
+#      match rate, max |SMD| (brpmatch's definition), and wall time. A run may
+#      set m_order (e.g. closest) and caliper (covariate: width in SDs).
 # Row-level data stays in memory; only aggregates are printed. Participant
 # counts from 1 to min_cell-1 are suppressed.
 suppressPackageStartupMessages({ library(DBI); library(yaml); library(MatchIt) })
@@ -87,17 +88,24 @@ smd <- function(X, treat, w = rep(1, length(treat))) {
 # --- 2. runs ---------------------------------------------------------------------
 fml <- as.formula(paste("treat ~", paste(c(num_cols, cat_cols), collapse = " + ")))
 exact <- if (length(exact_cols)) as.formula(paste("~", paste(exact_cols, collapse = " + "))) else NULL
-last <- NULL
+last <- list()  # previous run per setting, for the time projection
 for (r in cfg$runs) {
-  label <- sprintf("[run t%s%% c%s%%]", r$treated_pct, r$control_pct)
+  m_order <- r$m_order  # NULL = MatchIt's default (data order for Mahalanobis)
+  caliper <- if (length(r$caliper)) unlist(r$caliper) else NULL
+  setting <- paste(c(sprintf("order %s", m_order %||% "default"),
+                     if (length(caliper)) sprintf("caliper %s",
+                       paste(names(caliper), caliper, sep = " ", collapse = ", "))),
+                   collapse = "; ")
+  label <- sprintf("[run t%s%% c%s%%; %s]", r$treated_pct, r$control_pct, setting)
   keep <- (dat$treat == 1 & dat$person_id %% 100 < r$treated_pct) |
           (dat$treat == 0 & dat$person_id %% 100 < r$control_pct)
   d <- droplevels(dat[keep, ])
   # as.numeric: n_t * n_c overflows R integers (~2.1e9) from the 25% size up
   n_t <- as.numeric(sum(d$treat == 1)); n_c <- as.numeric(sum(d$treat == 0))
 
-  if (!is.null(last)) {
-    projected <- last$secs * (n_t * n_c) / (last$n_t * last$n_c) / 60
+  prev <- last[[setting]]
+  if (!is.null(prev)) {
+    projected <- prev$secs * (n_t * n_c) / (prev$n_t * prev$n_c) / 60
     if (projected > budget_min) {
       cat(sprintf("%s treated %s, controls %s: skipped, projected %.0f min > %d min budget\n",
                   label, fmt_n(n_t), fmt_n(n_c), projected, budget_min))
@@ -108,7 +116,8 @@ for (r in cfg$runs) {
   secs <- system.time(
     m <- matchit(fml, data = d, method = "nearest", distance = "mahalanobis",
                  exact = exact, ratio = cfg$ratio_k %||% 1,
-                 replace = isTRUE(cfg$with_replacement))
+                 replace = isTRUE(cfg$with_replacement),
+                 m.order = m_order, caliper = caliper, std.caliper = TRUE)
   )[["elapsed"]]
 
   n_matched <- sum(m$weights[d$treat == 1] > 0)
@@ -122,6 +131,6 @@ for (r in cfg$runs) {
   cat(sprintf("%s treated %s, controls %s (1:%.1f); matched %s; max |SMD| %.3f -> %.3f (%s); match wall time %.0fs\n",
               label, fmt_n(n_t), fmt_n(n_c), n_c / max(n_t, 1), rate,
               max(abs(s_before)), max(abs(s_after)), worst, secs))
-  last <- list(n_t = n_t, n_c = n_c, secs = max(secs, 0.01))
+  last[[setting]] <- list(n_t = n_t, n_c = n_c, secs = max(secs, 0.01))
 }
 cat("[bench] DONE\n")

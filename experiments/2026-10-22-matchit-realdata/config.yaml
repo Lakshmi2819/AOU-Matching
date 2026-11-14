@@ -19,13 +19,26 @@ with_replacement: false
 # first. Before each run the time is projected from the previous run (MatchIt's
 # nearest-neighbour Mahalanobis matching scales with treated x controls); runs
 # projected over max_minutes_per_run are skipped rather than started.
+#
+# m_order (optional): MatchIt's m.order; omitted = its default, data order for
+# Mahalanobis. caliper (optional): covariate -> width in standard deviations
+# (std.caliper); treated with no control inside every caliper go unmatched.
+#
+# Current step: can MatchIt be pushed toward better matches, and at what cost
+# in match rate? Four settings on the 5% subset (BRPMatch there: 56.6%
+# matched, max |SMD| 0.576).
 runs:
-  - {treated_pct: 1, control_pct: 1}
   - {treated_pct: 5, control_pct: 5}
-  - {treated_pct: 10, control_pct: 10}
-  - {treated_pct: 25, control_pct: 25}
-  - {treated_pct: 50, control_pct: 50}
-  - {treated_pct: 100, control_pct: 100}
+  - {treated_pct: 5, control_pct: 5, m_order: closest}
+  - {treated_pct: 5, control_pct: 5, caliper: {year_of_birth: 0.2, log_conditions: 0.2}}
+  - {treated_pct: 5, control_pct: 5, m_order: closest, caliper: {year_of_birth: 0.2, log_conditions: 0.2}}
+  # Done 2026-10-22 (size ladder, default settings; see README):
+  # - {treated_pct: 1, control_pct: 1}
+  # - {treated_pct: 5, control_pct: 5}
+  # - {treated_pct: 10, control_pct: 10}
+  # - {treated_pct: 25, control_pct: 25}
+  # - {treated_pct: 50, control_pct: 50}
+  # - {treated_pct: 100, control_pct: 100}
 max_minutes_per_run: 120
 
 # AoU dissemination policy: never display a participant count from 1 to 19.
