@@ -7,7 +7,8 @@
      across runs.
   3. Runs: for each entry in config `runs`, keep a deterministic hash-based
      share of treated and of controls (person_id mod 100; sets size and ratio),
-     match with the given rebucket threshold and n_neighbors, and report match
+     match with the given rebucket threshold, bucket_length_multiplier and
+     n_neighbors (a run that fails is reported and skipped), and report match
      rate, covariate balance (SMD computed in Spark, not via match_summary(),
      which collects the whole cohort to the driver), bucket stats, wall time,
      and diagnostics on the unmatched:
@@ -34,6 +35,7 @@ from pathlib import Path
 
 import brpmatch
 import pyspark.sql.functions as F
+from pyspark.ml.functions import vector_to_array
 import yaml
 from brpmatch import generate_features, match
 
@@ -278,16 +280,20 @@ feats = generate_features(
     exact_match_cols=exact_cols or None,
 ).cache()
 feat_cols = [c for c in feats.columns if c.endswith(FEATURE_SUFFIXES)]
+# Length of match()'s feature vector, for its base bucket length
+# 5 * N^(-1/dim) * bucket_length_multiplier (see run()).
+feat_dim = feats.select(F.size(vector_to_array("features")).alias("d")).agg(F.max("d")).collect()[0][0]
 print(f"[cohort] {len(feat_cols)} feature columns; exact on {', '.join(exact_cols) or 'nothing'}; "
       f"{cfg.get('feature_space', 'mahalanobis')}, 1:{cfg.get('ratio_k', 1)}, "
       f"{'with' if cfg.get('with_replacement') else 'without'} replacement, "
       f"n_neighbors {cfg.get('n_neighbors', 5)} (default; per-run overrides in labels)")
 
 # --- 3. runs ------------------------------------------------------------------------
-for r in cfg["runs"]:
+def run(r):
     tp, cp, thr = r["treated_pct"], r["control_pct"], r["threshold"]
     k_nn = r.get("n_neighbors", cfg.get("n_neighbors", 5))
-    label = f"[run t{tp}% c{cp}% thr{thr} k{k_nn}]"
+    mult = r.get("bucket_length_multiplier", cfg.get("bucket_length_multiplier", 1.0))
+    label = f"[run t{tp}% c{cp}% thr{thr} k{k_nn} m{mult:g}]"
     sub = feats.filter(
         ((F.col("treat__treat") == 1) & keep_share("person_id__id", tp))
         | ((F.col("treat__treat") == 0) & keep_share("person_id__id", cp))
@@ -302,6 +308,7 @@ for r in cfg["runs"]:
         ratio_k=cfg.get("ratio_k", 1),
         with_replacement=cfg.get("with_replacement", False),
         n_neighbors=k_nn,
+        bucket_length_multiplier=mult,
         num_patients_trigger_rebucket=thr,
         seed=cfg.get("seed", 42),
         verbose=False,  # its per-bucket printout can include small counts
@@ -317,6 +324,12 @@ for r in cfg["runs"]:
     print(f"{label} treated {fmt_n(n_t)}, controls {fmt_n(n_c)} (1:{n_c / max(n_t, 1):.1f}); "
           f"matched {rate}; max |SMD| {smd_before:.3f} -> {smd_after:.3f} ({worst}); "
           f"match wall time {secs:.0f}s")
+    # match() L2-normalizes vectors, so each random projection lies in [-1, 1]:
+    # a base length above 1 only splits people by the sign of each projection,
+    # and finer buckets come only from rebucketing at the threshold.
+    base_len = 5 * (n_t + n_c) ** (-1 / feat_dim) * mult
+    print(f"{label} [buckets] base bucket length {base_len:.2f} ({feat_dim} features; "
+          f"projections lie in [-1, 1])")
     for line in format_bucket_stats(collect_bucket_stats(bstats), min_cell, n_total=n_t + n_c,
                                     n_treated=n_t, inclusive=True):
         print(line.replace("[buckets]", f"{label} [buckets]", 1))
@@ -325,6 +338,16 @@ for r in cfg["runs"]:
                 lambda: diagnose(sub, units, bstats, feat_cols, n_t, n_matched, label))
     units.unpersist()
     sub.unpersist()
+
+
+for r in cfg["runs"]:
+    # One failed run (e.g. executor memory on large buckets) should not lose
+    # the ones after it; report it like a failed diagnostic and move on.
+    try:
+        run(r)
+    except Exception as e:  # noqa: BLE001 - report and continue
+        print(f"[run {r}] FAILED: {type(e).__name__}; next run continues", flush=True)
+        traceback.print_exc(file=sys.stdout)
 
 spark.stop()
 print("[bench] DONE")

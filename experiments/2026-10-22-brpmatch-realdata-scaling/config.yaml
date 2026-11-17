@@ -21,16 +21,38 @@ n_neighbors: 5
 # One matching run per entry, on the same cached cohort. treated_pct /
 # control_pct keep people with person_id mod 100 < pct in each group (the
 # same rule as the MatchIt comparison, so both match identical subsets);
-# threshold = rebucket threshold; n_neighbors overrides the default above.
+# threshold = rebucket threshold; n_neighbors and bucket_length_multiplier
+# override the defaults above. A run that fails is reported and skipped.
 #
-# Current step: one full-cohort run at n_neighbors 5 with the unmatched
-# diagnostics, to tell avoidable losses from treated that are hard to match.
+# Current step (branch brp-tuning, from the 2026-11-16 call with Shawn), all on
+# the 25% subset (51,368 treated / 56,362 controls; k5 there matched 55.1%,
+# max |SMD| 0.409 in 456 s), one setting changed at a time:
+#   1. n_neighbors 10 vs 5 (1:1), with the unmatched diagnostics.
+#   2. rebucket threshold in multiples at multiplier 1, then bucket length
+#      multiplier at a high threshold (40,000). match() L2-normalizes vectors,
+#      so projections lie in [-1, 1], and the base bucket length at multiplier 1
+#      is about 2-3 here (printed per run): any multiplier above ~0.35-0.5 gives the same top-level
+#      buckets (local check: 0.5, 1 and 4 identical; 4 also stopped
+#      rebucketing). Only smaller multipliers change bucket size.
+# Riskiest runs (largest buckets) last.
 runs:
-  - {treated_pct: 100, control_pct: 100, threshold: 10000, n_neighbors: 5}
-  # 2026-10-29: best possible 65.1% vs actual 52.8% (loss 25,262), so one run
-  # at 20 to see how much of that loss more candidates recover (50 skipped).
-  - {treated_pct: 100, control_pct: 100, threshold: 10000, n_neighbors: 20}
-  # Done 2026-10-22 (size ladder for the MatchIt comparison; see README):
+  - {treated_pct: 25, control_pct: 25, threshold: 10000, n_neighbors: 5, diagnostics: true}
+  - {treated_pct: 25, control_pct: 25, threshold: 10000, n_neighbors: 10, diagnostics: true}
+  - {treated_pct: 25, control_pct: 25, threshold: 1250}
+  - {treated_pct: 25, control_pct: 25, threshold: 2500}
+  - {treated_pct: 25, control_pct: 25, threshold: 5000}
+  - {treated_pct: 25, control_pct: 25, threshold: 40000, bucket_length_multiplier: 0.05}
+  - {treated_pct: 25, control_pct: 25, threshold: 40000, bucket_length_multiplier: 0.1}
+  - {treated_pct: 25, control_pct: 25, threshold: 40000, bucket_length_multiplier: 0.2}
+  - {treated_pct: 25, control_pct: 25, threshold: 40000, bucket_length_multiplier: 0.3}
+  - {treated_pct: 25, control_pct: 25, threshold: 20000}
+  - {treated_pct: 25, control_pct: 25, threshold: 40000}
+  # Done (see README):
+  # 2026-10-29 / 2026-11-01, full cohort with diagnostics:
+  # - {treated_pct: 100, control_pct: 100, threshold: 10000, n_neighbors: 5}
+  # 2026-11-01, failed before printing (cause not diagnosed):
+  # - {treated_pct: 100, control_pct: 100, threshold: 10000, n_neighbors: 20}
+  # 2026-10-22, size ladder for the MatchIt comparison:
   # - {treated_pct: 1, control_pct: 1, threshold: 10000}
   # - {treated_pct: 5, control_pct: 5, threshold: 10000}
   # - {treated_pct: 10, control_pct: 10, threshold: 10000}
@@ -41,7 +63,7 @@ runs:
 # birth_band_years band of birth_col x condition_quantiles quantile bins of
 # conditions_col.
 diagnostics:
-  enabled: true
+  enabled: false   # per run: diagnostics: true
   birth_col: year_of_birth
   conditions_col: log_conditions
   birth_band_years: 5
